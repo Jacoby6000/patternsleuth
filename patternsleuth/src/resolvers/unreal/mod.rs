@@ -47,10 +47,24 @@ pub mod util {
         string.encode_utf16().flat_map(u16::to_le_bytes).collect()
     }
     pub fn utf8_pattern(string: &str) -> Pattern {
-        Pattern::from_bytes(string.as_bytes().to_vec()).unwrap()
+        Pattern::from_bytes(
+            string
+                .as_bytes()
+                .to_vec()
+                .try_into()
+                .expect("string pattern must not be empty"),
+        )
     }
     pub fn utf16_pattern(string: &str) -> Pattern {
-        Pattern::from_bytes(utf16(string)).unwrap()
+        Pattern::from_bytes(
+            utf16(string)
+                .try_into()
+                .expect("string pattern must not be empty"),
+        )
+    }
+    pub fn address_pattern(address: u64) -> Pattern {
+        let [first, rest @ ..] = address.to_le_bytes();
+        Pattern::from_bytes(patternsleuth_scanner::NonEmptyBytes::new(first, rest))
     }
     pub async fn string_pattern(ctx: &AsyncContext<'_>, string: &str) -> Vec<u64> {
         join_all([utf16_pattern(string), utf8_pattern(string)].map(|p| ctx.scan(p)))
@@ -62,12 +76,8 @@ pub mod util {
         ctx: &AsyncContext<'_>,
         addresses: impl IntoIterator<Item = &u64> + Copy,
     ) -> Vec<u64> {
-        let refs_indirect = join_all(
-            addresses
-                .into_iter()
-                .map(|s| ctx.scan(Pattern::from_bytes(u64::to_le_bytes(*s).into()).unwrap())),
-        )
-        .await;
+        let refs_indirect =
+            join_all(addresses.into_iter().map(|s| ctx.scan(address_pattern(*s)))).await;
 
         let refs = join_all(
             addresses
@@ -110,12 +120,8 @@ pub mod util {
         ctx: &AsyncContext<'_>,
         addresses: impl IntoIterator<Item = &u64> + Copy,
     ) -> Vec<u64> {
-        let refs_indirect = join_all(
-            addresses
-                .into_iter()
-                .map(|s| ctx.scan(Pattern::from_bytes(u64::to_le_bytes(*s).into()).unwrap())),
-        )
-        .await;
+        let refs_indirect =
+            join_all(addresses.into_iter().map(|s| ctx.scan(address_pattern(*s)))).await;
 
         let refs = join_all(
             addresses
@@ -258,24 +264,8 @@ pub mod util {
 pub struct ConsoleManagerSingleton(pub u64);
 impl_resolver_singleton!(all, ConsoleManagerSingleton, |ctx| async {
     let strings = join_all([
-        ctx.scan(
-            Pattern::from_bytes(
-                "r.DumpingMovie"
-                    .encode_utf16()
-                    .flat_map(u16::to_le_bytes)
-                    .collect(),
-            )
-            .unwrap(),
-        ),
-        ctx.scan(
-            Pattern::from_bytes(
-                "vr.pixeldensity"
-                    .encode_utf16()
-                    .flat_map(u16::to_le_bytes)
-                    .collect(),
-            )
-            .unwrap(),
-        ),
+        ctx.scan(util::utf16_pattern("r.DumpingMovie")),
+        ctx.scan(util::utf16_pattern("vr.pixeldensity")),
     ])
     .await;
 

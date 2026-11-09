@@ -213,11 +213,7 @@ impl_resolver_singleton!(PEImage, StaticConstructObjectInternalString, |ctx| asy
             "UPlayMontageCallbackProxy\0",
         ]
         .iter()
-        .map(|s| {
-            ctx.scan(
-                Pattern::from_bytes(s.encode_utf16().flat_map(u16::to_le_bytes).collect()).unwrap(),
-            )
-        }),
+        .map(|s| ctx.scan(util::utf16_pattern(s))),
     )
     .await;
 
@@ -225,7 +221,7 @@ impl_resolver_singleton!(PEImage, StaticConstructObjectInternalString, |ctx| asy
         strings
             .iter()
             .flatten()
-            .map(|s| ctx.scan(Pattern::from_bytes(u64::to_le_bytes(*s).into()).unwrap())),
+            .map(|s| ctx.scan(util::address_pattern(*s))),
     )
     .await;
 

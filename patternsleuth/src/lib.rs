@@ -5,6 +5,7 @@ pub mod resolvers;
 pub mod symbols;
 #[cfg(feature = "symbols")]
 pub mod uesym;
+pub mod binary_matchers;
 
 pub mod scanner {
     pub use patternsleuth_scanner::*;

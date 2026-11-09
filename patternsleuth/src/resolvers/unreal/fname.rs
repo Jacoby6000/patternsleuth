@@ -252,13 +252,7 @@ impl_resolver_singleton!(PEImage, FNameToString, |ctx| async {
     let string = async {
         // Locates either variant by searching for a string ref and finding the first function
         // call directly above it. Which variant depends on how much inlining has occured
-        let s = Pattern::from_bytes(
-            "  DrivingBone: %s\nDrivenParamet"
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect(),
-        )
-        .unwrap();
+        let s = util::utf16_pattern("  DrivingBone: %s\nDrivenParamet");
         let strings = ctx.scan(s).await;
 
         let refs = join_all(

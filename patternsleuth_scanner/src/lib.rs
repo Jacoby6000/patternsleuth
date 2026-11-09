@@ -1,5 +1,57 @@
 use anyhow::{Context, Error, Result, bail};
 
+/// Owned literal bytes with at least one byte. Mutation cannot empty the buffer.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NonEmptyBytes(Vec<u8>);
+
+impl NonEmptyBytes {
+    pub fn new(first: u8, rest: impl IntoIterator<Item = u8>) -> Self {
+        let mut bytes = vec![first];
+        bytes.extend(rest);
+        Self(bytes)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl TryFrom<Vec<u8>> for NonEmptyBytes {
+    type Error = Error;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self> {
+        if bytes.is_empty() {
+            bail!("pattern must contain at least one byte");
+        }
+        Ok(Self(bytes))
+    }
+}
+
+/// Construct non-empty bytes from one or more byte expressions.
+///
+/// ```
+/// use patternsleuth_scanner::{neb, Pattern};
+/// let pattern = Pattern::from_bytes(neb![0x48, 0x8b, 0x01]);
+/// assert_eq!(pattern.to_string(), "48 8B 01");
+/// ```
+///
+/// Empty lists are rejected at compile time:
+///
+/// ```compile_fail
+/// use patternsleuth_scanner::neb;
+/// let bytes = neb![];
+/// ```
+#[macro_export]
+macro_rules! neb {
+    ($first:expr $(, $rest:expr)* $(,)?) => {
+        $crate::NonEmptyBytes::new($first, [$($rest),*])
+    };
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct PatternSimple {
     pub sig: Vec<u8>,
@@ -204,7 +256,7 @@ impl Pattern {
             bail!("unclosed capture at word {start}");
         }
         if sig.is_empty() {
-            bail!("pattern must match at least one byte");
+            bail!("pattern must contain at least one byte");
         }
 
         Ok(Self {
@@ -214,9 +266,10 @@ impl Pattern {
             xrefs,
         })
     }
-    /// Create a pattern from a literal `Vec<u8>` with `mask` filled with 0xff and `custom_offset = 0`.
-    pub fn from_bytes(sig: Vec<u8>) -> Result<Self> {
-        Ok(Self {
+    /// Create a literal pattern infallibly from guaranteed non-empty bytes.
+    pub fn from_bytes(bytes: NonEmptyBytes) -> Self {
+        let sig = bytes.into_vec();
+        Self {
             simple: PatternSimple {
                 mask: vec![0xff; sig.len()],
                 sig,
@@ -224,7 +277,7 @@ impl Pattern {
             custom_offset: 0,
             captures: vec![],
             xrefs: vec![],
-        })
+        }
     }
     #[inline(always)]
     pub fn is_match(&self, data: &[u8], base_address: usize, index: usize) -> bool {
@@ -283,6 +336,7 @@ impl Display for Pattern {
         Ok(())
     }
 }
+
 impl std::fmt::Debug for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Pattern(\"{self}\")")
@@ -600,6 +654,78 @@ pub fn scan_xref(patterns: &[&Xref], base_address: usize, data: &[u8]) -> Vec<Ve
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn non_empty_bytes_rejects_empty_vectors() {
+        let error = NonEmptyBytes::try_from(Vec::new()).unwrap_err();
+        assert_eq!(error.to_string(), "pattern must contain at least one byte");
+    }
+
+    #[test]
+    fn neb_accepts_single_bytes_multiple_bytes_and_trailing_commas() {
+        assert_eq!(neb![0].as_slice(), [0]);
+        assert_eq!(neb![0xff,].as_slice(), [0xff]);
+        assert_eq!(neb![0, 0xff, 0x3f].as_slice(), [0, 0xff, 0x3f]);
+        assert_eq!(neb![0, 0xff, 0x3f,].as_slice(), [0, 0xff, 0x3f]);
+    }
+
+    #[test]
+    fn neb_evaluates_each_expression_once_in_order() {
+        let mut next = 0u8;
+        let mut byte = || {
+            next += 1;
+            next
+        };
+        let bytes = neb![byte(), byte(), byte()];
+        assert_eq!(bytes.as_slice(), [1, 2, 3]);
+        assert_eq!(next, 3);
+    }
+
+    #[test]
+    fn empty_text_patterns_use_the_same_error_message() {
+        assert_eq!(
+            Pattern::new("").unwrap_err().to_string(),
+            "pattern must contain at least one byte"
+        );
+    }
+
+    #[test]
+    fn non_empty_bytes_preserves_owned_input() {
+        let bytes = vec![0, 0xff, 0x3f];
+        let ptr = bytes.as_ptr();
+        let bytes = NonEmptyBytes::try_from(bytes).unwrap();
+        assert_eq!(bytes.as_slice(), [0, 0xff, 0x3f]);
+        assert_eq!(bytes.as_slice().as_ptr(), ptr);
+        assert_eq!(bytes.into_vec(), [0, 0xff, 0x3f]);
+    }
+
+    #[test]
+    fn from_bytes_accepts_a_single_zero_byte() {
+        let pattern: Pattern = Pattern::from_bytes(neb![0]);
+        assert_eq!(pattern.to_string(), "00");
+        assert_eq!(
+            scan_pattern(&[&pattern], 0x1000, &[0, 1, 0]),
+            [vec![0x1000, 0x1002]]
+        );
+    }
+
+    #[test]
+    fn from_bytes_matches_and_formats_literal_bytes() {
+        let pattern = Pattern::from_bytes(neb![0, 0xff, 0x3f]);
+        assert_eq!(pattern.simple.sig, [0, 0xff, 0x3f]);
+        assert_eq!(pattern.simple.mask, [0xff; 3]);
+        assert_eq!(pattern.custom_offset, 0);
+        assert!(pattern.captures.is_empty());
+        assert!(pattern.xrefs.is_empty());
+        assert_eq!(pattern.to_string(), "00 FF 3F");
+        let data = [0x90, 0, 0xff, 0x3f, 0, 0xff, 0x3f];
+        assert!(pattern.is_match(&data, 0, 1));
+        assert!(!pattern.is_match(&data, 0, 0));
+        assert_eq!(
+            scan_pattern(&[&pattern], 0x1000, &data),
+            [vec![0x1001, 0x1004]]
+        );
+    }
 
     #[test]
     fn test_parse_bits() {

@@ -32,13 +32,7 @@ impl FromStr for BlueprintLibraryInit {
 impl_resolver!(all, BlueprintLibraryInit, |ctx| async {
     let mem = &ctx.image().memory;
 
-    let class_str = Pattern::from_bytes(
-        "UKismetStringTableLibrary\x00"
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect(),
-    )
-    .unwrap();
+    let class_str = super::util::utf16_pattern("UKismetStringTableLibrary\x00");
 
     let class_str = ctx.scan(class_str).await;
 

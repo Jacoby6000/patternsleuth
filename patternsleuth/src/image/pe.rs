@@ -33,8 +33,11 @@ impl PEImage {
         // place holder only
         let size = 12;
         let mut min = 0;
-        let mut max =
-            (self.exception_directory_range.end - self.exception_directory_range.start) / size - 1;
+        let count =
+            (self.exception_directory_range.end - self.exception_directory_range.start) / size;
+        let Some(mut max) = count.checked_sub(1) else {
+            return Ok(None);
+        };
 
         while min <= max {
             let i = (max + min) / 2;
@@ -54,6 +57,9 @@ impl PEImage {
                     min = i + 1;
                 }
             } else {
+                if i == 0 {
+                    return Ok(None);
+                }
                 max = i - 1;
             }
         }
